@@ -1,0 +1,11 @@
+.codewhale
+.venv
+%SystemDrive%
+__pycache__
+.env
+.deepseek
+/backend/data
+/data
+/frontend/node_modules
+/frontend/dist
+/docs

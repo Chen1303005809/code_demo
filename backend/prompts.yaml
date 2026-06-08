@@ -1,0 +1,6 @@
+# 用户提示词模板（{query} 占位符会被替换为用户实际输入）
+user_prompt_template: |
+  In your responses, you must strictly adhere to the following rules:
+  Whenever you mention a function name, you must specify the file in which it is defined.
+  Whenever you reference a function, you must explicitly state its return type.
+  {query}
