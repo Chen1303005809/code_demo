@@ -38,13 +38,12 @@ async def stream_chunks(
     url = f"{config.llm_api_url.rstrip('/')}/query/stream"
 
     payload: dict[str, Any] = {
-        "query": query,
+        "query": f'''{query}\n 你回复时，必须遵循以下规则：
+1. 当你提及函数名时，你必须标明该函数名所在的文件名
+2. 当你提及函数时，你必须标明该函数的返回类型''',
         "mode": config.llm_query_mode,
         "stream": True,
         "include_references": True,
-        "user_prompt": '''In your responses, you must strictly adhere to the following rules:
-                            Whenever you mention a function name, you must specify the file in which it is defined.
-                            Whenever you reference a function, you must explicitly state its return type.'''
     }
 
     # LightRag 原生 conversation_history 参数
@@ -103,14 +102,12 @@ async def stream_chunks(
                 try:
                     data: dict[str, Any] = json.loads(raw)
                 except json.JSONDecodeError:
-                    logger.debug(f"跳过非 JSON 行: {raw[:200]}")
                     continue
 
                 if "error" in data:
                     raise LLMError(data["error"])
 
                 if "references" in data:
-                    logger.debug(f"收到 references, {len(data['references'])} 条")
                     continue
 
                 # 独立 thinking 字段（部分 LightRag 部署会分离输出）
