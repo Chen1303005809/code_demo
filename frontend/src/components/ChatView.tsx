@@ -3,9 +3,17 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { MessageItem } from "../lib/types";
 
+type QueryState =
+  | { phase: "idle" }
+  | { phase: "queued"; position: number }
+  | { phase: "streaming" }
+  | { phase: "done"; queryId: string; totalMs: number }
+  | { phase: "error"; message: string };
+
 interface Props {
   messages: MessageItem[];
   streamingContent: string;
+  state: QueryState;
 }
 
 // ── 思考标签解析 ──────────────────────────────────────────
@@ -185,22 +193,99 @@ const RenderedContent: React.FC<{ content: string }> = ({ content }) => {
   );
 };
 
+// ── 状态栏（会话框内）─────────────────────────────────────
+
+const StatusBanner: React.FC<{ state: QueryState }> = ({ state }) => {
+  const config = (() => {
+    switch (state.phase) {
+      case "idle":
+        return { icon: "●", text: "就绪", color: "#27ae60", bg: "#eafaf1" };
+      case "queued":
+        return {
+          icon: "⏳",
+          text: `排队中 · 前面 ${state.position} 人`,
+          color: "#f39c12",
+          bg: "#fef9e7",
+        };
+      case "streaming":
+        return { icon: "●", text: "正在响应...", color: "#3498db", bg: "#eaf2fd", pulse: true };
+      case "done":
+        return {
+          icon: "✓",
+          text: `完成 · ${state.totalMs}ms`,
+          color: "#27ae60",
+          bg: "#eafaf1",
+        };
+      case "error":
+        return { icon: "✕", text: state.message, color: "#e74c3c", bg: "#fdedec" };
+    }
+  })();
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 16px",
+        margin: "8px 16px 4px",
+        borderRadius: 8,
+        background: config.bg,
+        border: `1px solid ${config.color}20`,
+        fontSize: 13,
+        color: config.color,
+        fontWeight: 500,
+        flexShrink: 0,
+      }}
+    >
+      <span
+        style={{
+          display: "inline-block",
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          background: config.color,
+          ...(config.pulse
+            ? { animation: "pulse 1.2s ease-in-out infinite" }
+            : {}),
+        }}
+      />
+      <span>{config.text}</span>
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
+        }
+      `}</style>
+    </div>
+  );
+};
+
 // ── 主组件 ────────────────────────────────────────────────
 
-export default function ChatView({ messages, streamingContent }: Props) {
+export default function ChatView({ messages, streamingContent, state }: Props) {
   if (messages.length === 0 && !streamingContent) {
     return (
       <div
         style={{
           flex: 1,
           display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "#999",
-          fontSize: 14,
+          flexDirection: "column",
         }}
       >
-        <p>输入问题，开始对话。</p>
+        <StatusBanner state={state} />
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#999",
+            fontSize: 14,
+          }}
+        >
+          <p>输入问题，开始对话。</p>
+        </div>
       </div>
     );
   }
@@ -211,8 +296,11 @@ export default function ChatView({ messages, streamingContent }: Props) {
         flex: 1,
         overflow: "auto",
         padding: "16px 24px",
+        display: "flex",
+        flexDirection: "column",
       }}
     >
+      <StatusBanner state={state} />
       {messages.map((msg) => (
         <div
           key={msg.id}

@@ -2,7 +2,6 @@ import React, { useCallback, useRef, useState } from "react";
 import QueryInput from "./components/QueryInput";
 import ChatView from "./components/ChatView";
 import SessionSidebar from "./components/SessionSidebar";
-import StatusBar from "./components/StatusBar";
 import type { MessageItem, SSEEvent } from "./lib/types";
 import { fetchSession, streamSessionQuery } from "./lib/api";
 
@@ -13,47 +12,101 @@ type QueryState =
   | { phase: "done"; queryId: string; totalMs: number }
   | { phase: "error"; message: string };
 
+// ── 每个会话独立的状态 ────────────────────────────
+
+interface SessionData {
+  messages: MessageItem[];
+  streamingContent: string;
+  queryState: QueryState;
+  loaded: boolean; // 是否已从后端加载过消息
+}
+
+function emptySession(): SessionData {
+  return {
+    messages: [],
+    streamingContent: "",
+    queryState: { phase: "idle" },
+    loaded: false,
+  };
+}
+
+// ── 辅助：更新 sessionMap 中某个会话的部分字段 ─────
+
+function updateSession(
+  prev: Record<string, SessionData>,
+  sid: string,
+  patch: Partial<SessionData>
+): Record<string, SessionData> {
+  const cur = prev[sid] ?? emptySession();
+  return { ...prev, [sid]: { ...cur, ...patch } };
+}
+
 export default function App() {
+  // ── 核心状态：按会话隔离 ──────────────────────────
+  const [sessionMap, setSessionMap] = useState<Record<string, SessionData>>({});
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<MessageItem[]>([]);
-  const [streamingContent, setStreamingContent] = useState("");
-  const streamingRef = useRef(""); // 实时累计，避免闭包陈旧值
-  const [state, setState] = useState<QueryState>({ phase: "idle" });
-  const [abortCtrl, setAbortCtrl] = useState<AbortController | null>(null);
+
+  // 同步 refs：SSE 回调中需要实时读写，避免闭包陈旧值
+  const streamingRefs = useRef<Record<string, string>>({});
+  const abortCtrls = useRef<Record<string, AbortController>>({});
+
+  // 侧边栏刷新 key
   const [sessionListKey, setSessionListKey] = useState(0);
 
-  // ── 加载会话消息 ───────────────────────────────────
+  // ── 派生：当前活跃会话的展示数据 ──────────────────
 
-  const loadSession = useCallback(async (sessionId: string) => {
+  const current = activeSessionId
+    ? (sessionMap[activeSessionId] ?? emptySession())
+    : null;
+
+  const displayMessages = current?.messages ?? [];
+  const displayStreaming = current?.streamingContent ?? "";
+  const displayState = current?.queryState ?? { phase: "idle" as const };
+
+  // ── 加载会话消息（仅首次、或后端有更新时）─────────
+
+  const ensureSessionLoaded = useCallback(async (sessionId: string) => {
+    // 如果已有缓存且已加载过，直接复用（含流式进行中的会话）
+    const cached = sessionMap[sessionId];
+    if (cached?.loaded) return;
+
     try {
       const detail = await fetchSession(sessionId);
-      setMessages(detail.messages);
-      setStreamingContent("");
-      streamingRef.current = "";
-      setState({ phase: "idle" });
+      setSessionMap((prev) =>
+        updateSession(prev, sessionId, {
+          messages: detail.messages,
+          streamingContent: "",
+          queryState: { phase: "idle" },
+          loaded: true,
+        })
+      );
+      // 清理该会话的流式 ref（后端没有流式中的内容）
+      delete streamingRefs.current[sessionId];
     } catch {
-      setMessages([]);
+      setSessionMap((prev) =>
+        updateSession(prev, sessionId, {
+          messages: [],
+          loaded: true,
+        })
+      );
     }
-  }, []);
+  }, [sessionMap]);
 
-  // ── 选择会话 ───────────────────────────────────────
+  // ── 选择会话：只切换 activeId，不中止流 ──────────
 
   const handleSelectSession = useCallback(
     (id: string) => {
       setActiveSessionId(id);
-      loadSession(id);
+      ensureSessionLoaded(id);
     },
-    [loadSession]
+    [ensureSessionLoaded]
   );
 
   // ── 新建会话 ───────────────────────────────────────
 
   const handleNewSession = useCallback((id: string) => {
+    setSessionMap((prev) => updateSession(prev, id, { ...emptySession(), loaded: true }));
     setActiveSessionId(id);
-    setMessages([]);
-    setStreamingContent("");
-    streamingRef.current = "";
-    setState({ phase: "idle" });
   }, []);
 
   // ── 发送查询 ───────────────────────────────────────
@@ -61,102 +114,153 @@ export default function App() {
   const handleQuery = useCallback(
     (query: string) => {
       if (!activeSessionId) return;
+      const sid = activeSessionId; // 闭包捕获，防止后续变化
 
-      // 取消上一次请求
-      abortCtrl?.abort();
+      // 取消该会话上一次请求
+      abortCtrls.current[sid]?.abort();
       const ctrl = new AbortController();
-      setAbortCtrl(ctrl);
-      setStreamingContent("");
-      streamingRef.current = "";
-      setState({ phase: "idle" });
+      abortCtrls.current[sid] = ctrl;
 
-      // 乐观添加到消息列表
+      // 重置该会话的流式状态
+      streamingRefs.current[sid] = "";
+      setSessionMap((prev) =>
+        updateSession(prev, sid, {
+          streamingContent: "",
+          queryState: { phase: "idle" },
+        })
+      );
+
+      // 乐观添加用户消息
       const tempUserMsg: MessageItem = {
         id: "temp-" + Date.now(),
-        session_id: activeSessionId,
+        session_id: sid,
         role: "user",
         content: query,
         total_ms: 0,
         created_at: new Date().toISOString(),
       };
-      setMessages((prev) => [...prev, tempUserMsg]);
+      setSessionMap((prev) =>
+        updateSession(prev, sid, {
+          messages: [...(prev[sid]?.messages ?? []), tempUserMsg],
+        })
+      );
 
       streamSessionQuery(
-        activeSessionId,
+        sid,
         query,
         (ev: SSEEvent) => {
           switch (ev.type) {
             case "queued":
-              setState({
-                phase: "queued",
-                position: ev.data.position,
-              });
+              setSessionMap((prev) =>
+                updateSession(prev, sid, {
+                  queryState: {
+                    phase: "queued",
+                    position: ev.data.position,
+                  },
+                })
+              );
               break;
             case "started":
-              setState({ phase: "streaming" });
+              setSessionMap((prev) =>
+                updateSession(prev, sid, {
+                  queryState: { phase: "streaming" },
+                })
+              );
               break;
-            case "chunk":
-              streamingRef.current += ev.data.content;
-              setStreamingContent(streamingRef.current);
+            case "chunk": {
+              const acc = (streamingRefs.current[sid] ?? "") + ev.data.content;
+              streamingRefs.current[sid] = acc;
+              setSessionMap((prev) =>
+                updateSession(prev, sid, {
+                  streamingContent: acc,
+                })
+              );
               break;
+            }
             case "done": {
-              setState({
-                phase: "done",
-                queryId: ev.data.query_id,
-                totalMs: ev.data.total_ms,
-              });
+              setSessionMap((prev) =>
+                updateSession(prev, sid, {
+                  queryState: {
+                    phase: "done",
+                    queryId: ev.data.query_id,
+                    totalMs: ev.data.total_ms,
+                  },
+                })
+              );
 
-              const finalContent = streamingRef.current;
+              const finalContent = streamingRefs.current[sid] ?? "";
               if (finalContent) {
                 const assistantMsg: MessageItem = {
                   id: ev.data.message_id || "msg-" + Date.now(),
-                  session_id: activeSessionId,
+                  session_id: sid,
                   role: "assistant",
                   content: finalContent,
                   total_ms: ev.data.total_ms,
                   created_at: new Date().toISOString(),
                 };
-                setMessages((prev) => {
-                  const filtered = prev.filter(
+                setSessionMap((prev) => {
+                  const cur = prev[sid] ?? emptySession();
+                  const filtered = cur.messages.filter(
                     (m) => m.role === "assistant" || !m.id.startsWith("temp-")
                   );
-                  return [...filtered, assistantMsg];
+                  return updateSession(prev, sid, {
+                    messages: [...filtered, assistantMsg],
+                    streamingContent: "",
+                    loaded: true,
+                  });
                 });
               }
 
-              setStreamingContent("");
-              streamingRef.current = "";
+              delete streamingRefs.current[sid];
               // 刷新会话列表（消息数已更新）
               setSessionListKey((k) => k + 1);
               break;
             }
             case "error":
-              setState({ phase: "error", message: ev.data.message });
+              setSessionMap((prev) =>
+                updateSession(prev, sid, {
+                  queryState: {
+                    phase: "error",
+                    message: ev.data.message,
+                  },
+                })
+              );
               break;
           }
         },
         ctrl.signal
       );
     },
-    [activeSessionId, abortCtrl]
+    [activeSessionId]
   );
 
-  const handleCancel = useCallback(() => {
-    abortCtrl?.abort();
-    setAbortCtrl(null);
-    setState({ phase: "idle" });
-    setStreamingContent("");
-    streamingRef.current = "";
-  }, [abortCtrl]);
+  // ── 取消当前会话的请求 ────────────────────────────
 
-  // ── 会话列表刷新回调 ──────────────────────────────
+  const handleCancel = useCallback(() => {
+    if (!activeSessionId) return;
+    const sid = activeSessionId;
+    abortCtrls.current[sid]?.abort();
+    delete abortCtrls.current[sid];
+    delete streamingRefs.current[sid];
+    setSessionMap((prev) =>
+      updateSession(prev, sid, {
+        streamingContent: "",
+        queryState: { phase: "idle" },
+      })
+    );
+  }, [activeSessionId]);
+
+  // ── 会话列表刷新回调（删除当前会话等触发）─────────
 
   const handleRefreshSessions = useCallback(() => {
+    // 中止所有进行中的流
+    for (const ctrl of Object.values(abortCtrls.current)) {
+      ctrl.abort();
+    }
+    abortCtrls.current = {};
+    streamingRefs.current = {};
+    setSessionMap({});
     setActiveSessionId(null);
-    setMessages([]);
-    setStreamingContent("");
-    streamingRef.current = "";
-    setState({ phase: "idle" });
   }, []);
 
   // ── 渲染 ───────────────────────────────────────────
@@ -192,13 +296,18 @@ export default function App() {
           {activeSessionId ? (
             <>
               <QueryInput
+                key={activeSessionId}
                 onQuery={handleQuery}
                 onCancel={handleCancel}
                 disabled={
-                  state.phase === "streaming" || state.phase === "queued"
+                  displayState.phase === "streaming" || displayState.phase === "queued"
                 }
               />
-              <ChatView messages={messages} streamingContent={streamingContent} />
+              <ChatView
+                messages={displayMessages}
+                streamingContent={displayStreaming}
+                state={displayState}
+              />
             </>
           ) : (
             <div
@@ -221,8 +330,6 @@ export default function App() {
           )}
         </main>
       </div>
-
-      <StatusBar state={state} activeSessionId={activeSessionId} />
     </div>
   );
 }
