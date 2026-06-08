@@ -296,8 +296,6 @@ export default function ChatView({ messages, streamingContent, state }: Props) {
         flex: 1,
         overflow: "auto",
         padding: "16px 24px",
-        display: "flex",
-        flexDirection: "column",
       }}
     >
       <StatusBanner state={state} />
