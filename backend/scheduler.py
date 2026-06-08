@@ -26,7 +26,7 @@ from db import (
     update_session_title,
 )
 from history import save as save_history
-from llm_client import LLMError, build_query_with_history, stream_chunks
+from llm_client import LLMError, stream_chunks
 from models import (
     SSEChunkData,
     SSEDoneData,
@@ -42,6 +42,7 @@ class _WaitingTask:
     event_queue: asyncio.Queue[str | None]
     session_id: str = ""
     message_id: str = ""
+    conversation_history: list[dict] | None = None
 
 
 @dataclass
@@ -116,33 +117,38 @@ class Scheduler:
         if len(context_messages) == 0:
             await update_session_title(session_id, make_title(query))
 
-        # 构建带历史上下文的查询
-        contextual_query = build_query_with_history(
-            query, context_messages,
-        )
+        # 构建 LightRag 格式的 conversation_history
+        conv_history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in context_messages
+        ] if context_messages else None
 
         if not self._semaphore.locked():
             await self._semaphore.acquire()
             async for line in self._run(
-                query_id, contextual_query,
+                query_id, query,
                 session_id=session_id, message_id=assistant_msg_id,
+                conversation_history=conv_history,
             ):
                 yield line
         else:
             async for line in self._enqueue_and_wait(
-                query_id, contextual_query,
+                query_id, query,
                 session_id=session_id, message_id=assistant_msg_id,
+                conversation_history=conv_history,
             ):
                 yield line
 
     async def _enqueue_and_wait(
         self, query_id: str, query: str,
         session_id: str = "", message_id: str = "",
+        conversation_history: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         event_queue: asyncio.Queue[str | None] = asyncio.Queue()
         task = _WaitingTask(
             query_id=query_id, query=query, event_queue=event_queue,
             session_id=session_id, message_id=message_id,
+            conversation_history=conversation_history,
         )
         await self._queue.put(task)
 
@@ -162,6 +168,7 @@ class Scheduler:
     async def _run(
         self, query_id: str, query: str,
         session_id: str = "", message_id: str = "",
+        conversation_history: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         config = get_config()
         started_at = time.monotonic()
@@ -170,7 +177,10 @@ class Scheduler:
 
         try:
             yield _SSEEvent.started()
-            async for chunk_text in stream_chunks(config, query):
+            async for chunk_text in stream_chunks(
+                config, query,
+                conversation_history=conversation_history,
+            ):
                 full_answer_parts.append(chunk_text)
                 yield _SSEEvent.chunk(chunk_text)
         except LLMError as exc:
@@ -230,6 +240,7 @@ class Scheduler:
         async for line in self._run(
             task.query_id, task.query,
             session_id=task.session_id, message_id=task.message_id,
+            conversation_history=task.conversation_history,
         ):
             await task.event_queue.put(line)
         await task.event_queue.put(None)

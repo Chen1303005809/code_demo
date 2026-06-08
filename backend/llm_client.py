@@ -18,35 +18,10 @@ class LLMError(Exception):
     pass
 
 
-def build_query_with_history(
-    query: str, history_messages: list[dict],
-) -> str:
-    """将会话历史拼入查询文本，形成带上下文的完整提示。
-
-    history_messages 按时间排序，每项包含 role/content 字段。
-    格式：
-      [对话历史]
-      User: ...
-      Assistant: ...
-      ---
-      [当前问题]
-      ...
-    """
-    if not history_messages:
-        return query
-
-    parts: list[str] = ["[对话历史]"]
-    for msg in history_messages:
-        role_label = "User" if msg["role"] == "user" else "Assistant"
-        parts.append(f"{role_label}: {msg['content']}")
-    parts.append("---")
-    parts.append("[当前问题]")
-    parts.append(query)
-
-    return "\n".join(parts)
-
-
-async def stream_chunks(config: Config, query: str) -> AsyncIterator[str]:
+async def stream_chunks(
+    config: Config, query: str,
+    conversation_history: list[dict] | None = None,
+) -> AsyncIterator[str]:
     """向 LightRag /query/stream 发起流式请求。
 
     请求体：{"query":..., "mode":"mix", "stream":true, "include_references":true}
@@ -71,6 +46,10 @@ async def stream_chunks(config: Config, query: str) -> AsyncIterator[str]:
                             Whenever you mention a function name, you must specify the file in which it is defined.
                             Whenever you reference a function, you must explicitly state its return type.'''
     }
+
+    # LightRag 原生 conversation_history 参数
+    if conversation_history:
+        payload["conversation_history"] = conversation_history
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if config.llm_api_key:
@@ -134,6 +113,12 @@ async def stream_chunks(config: Config, query: str) -> AsyncIterator[str]:
                     logger.debug(f"收到 references, {len(data['references'])} 条")
                     continue
 
+                # 独立 thinking 字段（部分 LightRag 部署会分离输出）
+                thinking = data.get("thinking", "")
+                if thinking:
+                    yield f"thinking\n{thinking}\n"
+
+                # 正式回复内容（可能内嵌 思考... 标签）
                 content = data.get("response", "")
                 if content:
                     yield content

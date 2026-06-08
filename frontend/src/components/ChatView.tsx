@@ -17,7 +17,8 @@ interface ContentBlock {
 
 function parseContentBlocks(raw: string): ContentBlock[] {
   const blocks: ContentBlock[] = [];
-  const thinkRegex = /(?:thinking|思考)\s*([\s\S]*?)\s*/gi;
+  // 匹配 <think>...</think> (HTML风格) 和 思考/thinking 标签
+  const thinkRegex = /<think>([\s\S]*?)<\/think>|(?:thinking|思考)\s*([\s\S]*?)\s*/gi;
 
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -27,7 +28,8 @@ function parseContentBlocks(raw: string): ContentBlock[] {
     if (before.trim()) {
       blocks.push({ type: "markdown", content: before });
     }
-    const thinkContent = match[1].trim();
+    // 两个捕获组（<think> 或 thinking/思考）总有一个非空
+    const thinkContent = (match[1] || match[2] || "").trim();
     if (thinkContent) {
       blocks.push({ type: "thinking", content: thinkContent });
     }
@@ -50,40 +52,53 @@ function parseContentBlocks(raw: string): ContentBlock[] {
 
 const ThinkingBlock: React.FC<{ content: string }> = ({ content }) => {
   const preview =
-    content.length > 80 ? content.slice(0, 80).replace(/\n/g, " ") + "…" : content;
+    content.length > 60 ? content.slice(0, 60).replace(/\n/g, " ") + "…" : content;
 
   return (
     <details
       style={{
-        margin: "8px 0",
-        border: "1px solid #d4a574",
-        borderRadius: 8,
-        background: "#fdf6ec",
+        margin: "10px 0",
+        border: "1px solid #e2c498",
+        borderRadius: 10,
+        background: "#fffbf5",
         overflow: "hidden",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
       }}
     >
       <summary
         style={{
-          padding: "6px 12px",
+          padding: "8px 14px",
           cursor: "pointer",
           fontWeight: 600,
           fontSize: 12,
-          color: "#b07d44",
-          background: "#fef0db",
+          color: "#8b6914",
+          background: "linear-gradient(135deg, #fef5e7, #fdf0d5)",
           borderBottom: "1px solid #f0dbb8",
           userSelect: "none",
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
         }}
       >
-        💭 思考过程 · {preview}
+        <span style={{ fontSize: 14 }}>🧠</span>
+        <span>思考过程</span>
+        <span style={{ fontWeight: 400, color: "#b09760", marginLeft: 8, fontSize: 11 }}>
+          {preview}
+        </span>
+        <span style={{ marginLeft: "auto", fontSize: 10, color: "#c4a96a" }}>
+          点击展开 ▼
+        </span>
       </summary>
       <div
         style={{
-          padding: "8px 14px",
-          fontSize: 12,
+          padding: "10px 16px",
+          fontSize: 12.5,
           color: "#5c4a2e",
-          lineHeight: 1.6,
+          lineHeight: 1.7,
           whiteSpace: "pre-wrap",
           wordBreak: "break-word",
+          borderLeft: "3px solid #f0dbb8",
+          margin: "6px 10px 10px",
         }}
       >
         {content}
