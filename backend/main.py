@@ -211,22 +211,6 @@ async def handle_list_sessions(project_id: str | None = Query(default=None)):
     return SessionList(items=items)
 
 
-@app.post("/api/sessions", response_model=SessionItem)
-async def handle_create_session(project_id: str | None = Query(default=None)):
-    """创建新会话（可指定所属项目）。"""
-    session_id = f"sess_{uuid.uuid4().hex[:8]}"
-    created_at = datetime.now(timezone.utc).isoformat()
-    await create_session(session_id, "新对话", created_at, project_id=project_id or "")
-    return SessionItem(
-        id=session_id,
-        title="新对话",
-        project_id=project_id or "",
-        created_at=created_at,
-        updated_at=created_at,
-        msg_count=0,
-    )
-
-
 @app.get("/api/projects/{project_id}/sessions", response_model=SessionList)
 async def handle_list_project_sessions(project_id: str):
     """列出指定项目下的会话。"""
@@ -247,10 +231,24 @@ async def handle_list_project_sessions(project_id: str):
 
 @app.post("/api/projects/{project_id}/sessions", response_model=SessionItem)
 async def handle_create_project_session(project_id: str):
-    """在指定项目下创建新会话。"""
-    existing = await get_project(project_id)
-    if existing is None:
+    """在指定项目下创建新会话（已有空会话时直接返回，防止无限创建）。"""
+    from db import find_empty_session
+
+    existing_project = await get_project(project_id)
+    if existing_project is None:
         raise HTTPException(status_code=404, detail="项目不存在")
+
+    # 如果该项目下已有空会话，复用而非新建
+    empty = await find_empty_session(project_id)
+    if empty is not None:
+        return SessionItem(
+            id=empty["id"],
+            title=empty["title"],
+            project_id=empty.get("project_id") or project_id,
+            created_at=empty["created_at"],
+            updated_at=empty["updated_at"],
+            msg_count=0,
+        )
 
     session_id = f"sess_{uuid.uuid4().hex[:8]}"
     created_at = datetime.now(timezone.utc).isoformat()

@@ -329,6 +329,25 @@ async def delete_project(project_id: str) -> None:
         await db.close()
 
 
+async def find_empty_session(project_id: str) -> dict | None:
+    """查找项目下第一条空会话（无消息），用于防止重复创建。"""
+    db = await _connect()
+    try:
+        cursor = await db.execute(
+            """SELECT s.id, s.title, s.project_id, s.created_at, s.updated_at
+               FROM sessions s
+               WHERE s.project_id = ?
+                 AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id)
+               ORDER BY s.created_at DESC
+               LIMIT 1""",
+            (project_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
 async def get_session_project(session_id: str) -> str | None:
     """获取会话所属的项目 id。"""
     db = await _connect()

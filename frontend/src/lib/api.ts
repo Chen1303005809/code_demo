@@ -136,11 +136,10 @@ export async function fetchSessions(projectId?: string): Promise<SessionList> {
   return resp.json();
 }
 
-export async function createSession(projectId?: string): Promise<SessionItem> {
-  const url = projectId
-    ? `/api/projects/${encodeURIComponent(projectId)}/sessions`
-    : "/api/sessions";
-  const resp = await fetch(url, { method: "POST" });
+export async function createSession(projectId: string): Promise<SessionItem> {
+  const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/sessions`, {
+    method: "POST",
+  });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }

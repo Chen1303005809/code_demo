@@ -44,9 +44,13 @@ export default function SessionSidebar({ activeId, projectId, onSelect, onNew, o
     };
   }, [projectId]);
 
+  // 是否已存在空会话（无消息），用于防止重复创建
+  const hasEmptySession = items.some((it) => it.msg_count === 0);
+
   const handleNew = async () => {
+    if (!projectId) return;
     try {
-      const sess = await createSession(projectId ?? undefined);
+      const sess = await createSession(projectId);
       setItems((prev) => [sess, ...prev]);
       onNew(sess.id);
     } catch {
@@ -106,20 +110,24 @@ export default function SessionSidebar({ activeId, projectId, onSelect, onNew, o
         }}
       >
         <span>💬 会话列表</span>
-        <button
-          onClick={handleNew}
-          style={{
-            background: "#3498db",
-            color: "#fff",
-            border: "none",
-            borderRadius: 4,
-            cursor: "pointer",
-            fontSize: 12,
-            padding: "3px 10px",
-          }}
-        >
-          ＋ 新建
-        </button>
+        {projectId && (
+          <button
+            onClick={handleNew}
+            disabled={hasEmptySession}
+            title={hasEmptySession ? "已有空会话，请先发送消息" : "新建会话"}
+            style={{
+              background: hasEmptySession ? "#b0b0b0" : "#3498db",
+              color: "#fff",
+              border: "none",
+              borderRadius: 4,
+              cursor: hasEmptySession ? "not-allowed" : "pointer",
+              fontSize: 12,
+              padding: "3px 10px",
+            }}
+          >
+            ＋ 新建
+          </button>
+        )}
       </div>
 
       {/* 列表 */}
@@ -200,21 +208,27 @@ export default function SessionSidebar({ activeId, projectId, onSelect, onNew, o
           ))}
         {!loading && !error && items.length === 0 && (
           <div style={{ padding: 20, textAlign: "center", color: "#999", fontSize: 13 }}>
-            <p style={{ marginBottom: 12 }}>暂无会话</p>
-            <button
-              onClick={handleNew}
-              style={{
-                background: "#3498db",
-                color: "#fff",
-                border: "none",
-                borderRadius: 4,
-                cursor: "pointer",
-                fontSize: 13,
-                padding: "6px 16px",
-              }}
-            >
-              创建第一个会话
-            </button>
+            {projectId ? (
+              <>
+                <p style={{ marginBottom: 12 }}>暂无会话</p>
+                <button
+                  onClick={handleNew}
+                  style={{
+                    background: "#3498db",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                    fontSize: 13,
+                    padding: "6px 16px",
+                  }}
+                >
+                  创建第一个会话
+                </button>
+              </>
+            ) : (
+              <p>📁 请先在顶部选择一个项目</p>
+            )}
           </div>
         )}
       </div>
