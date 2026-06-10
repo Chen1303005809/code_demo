@@ -44,15 +44,10 @@ async def stream_chunks(
 
     url = f"{config.llm_api_url.rstrip('/')}/query/stream"
 
-    # 使用配置中的提示词模板拼接最终 query
-    template = config.llm_user_prompt_template
-    if "{query}" in template:
-        final_query = template.replace("{query}", query)
-    else:
-        final_query = f"{template}\n{query}"
-
     payload: dict[str, Any] = {
-        "query": final_query,
+        "query": f'''{query}\n 你回复时，必须遵循以下规则：
+                    1. 当你提及函数名时，你必须标明该函数名所在的文件名
+                    2. 当你提及函数时，你必须标明该函数的返回类型''',
         "mode": config.llm_query_mode,
         "stream": True,
         "include_references": True,
