@@ -48,3 +48,36 @@ def get_config() -> Config:
     if _config is None:
         _config = Config()
     return _config
+
+
+# ── 项目级配置解析 ─────────────────────────────────
+
+class EffectiveConfig:
+    """合并全局配置与项目级覆盖后的有效配置。"""
+
+    def __init__(self, project: dict | None = None) -> None:
+        base = get_config()
+        if project:
+            self.llm_api_url = project.get("llm_api_url") or base.llm_api_url
+        else:
+            self.llm_api_url = base.llm_api_url
+
+        self.llm_api_key: str = (
+            project.get("llm_api_key") if project and project.get("llm_api_key")
+            else base.llm_api_key
+        )
+
+        if project:
+            self.llm_query_mode = project.get("llm_query_mode") or base.llm_query_mode
+        else:
+            self.llm_query_mode = base.llm_query_mode
+
+        self.llm_timeout_ms: int = base.llm_timeout_ms
+
+        if project:
+            self.llm_user_prompt_template = project.get("prompt_template") or base.llm_user_prompt_template
+        else:
+            self.llm_user_prompt_template = base.llm_user_prompt_template
+
+        self.max_concurrency: int = base.max_concurrency
+        self.db_path: str = base.db_path

@@ -1,8 +1,9 @@
 import React, { useCallback, useRef, useState } from "react";
 import QueryInput from "./components/QueryInput";
 import ChatView from "./components/ChatView";
+import ProjectSelector from "./components/ProjectSelector";
 import SessionSidebar from "./components/SessionSidebar";
-import type { MessageItem, SSEEvent } from "./lib/types";
+import type { MessageItem, ProjectItem, SSEEvent } from "./lib/types";
 import { fetchSession, streamSessionQuery } from "./lib/api";
 
 type QueryState =
@@ -45,6 +46,7 @@ export default function App() {
   // ── 核心状态：按会话隔离 ──────────────────────────
   const [sessionMap, setSessionMap] = useState<Record<string, SessionData>>({});
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
 
   // 同步 refs：SSE 回调中需要实时读写，避免闭包陈旧值
   const streamingRefs = useRef<Record<string, string>>({});
@@ -63,10 +65,26 @@ export default function App() {
   const displayStreaming = current?.streamingContent ?? "";
   const displayState = current?.queryState ?? { phase: "idle" as const };
 
+  // ── 项目切换 ────────────────────────────────────────
+
+  const handleSelectProject = useCallback((project: ProjectItem) => {
+    setActiveProjectId(project.id);
+    // 切换项目时清空当前会话
+    setActiveSessionId(null);
+    setSessionMap({});
+    setSessionListKey((k) => k + 1);
+  }, []);
+
+  const handleProjectRefresh = useCallback(() => {
+    setActiveProjectId(null);
+    setActiveSessionId(null);
+    setSessionMap({});
+    setSessionListKey((k) => k + 1);
+  }, []);
+
   // ── 加载会话消息（仅首次、或后端有更新时）─────────
 
   const ensureSessionLoaded = useCallback(async (sessionId: string) => {
-    // 如果已有缓存且已加载过，直接复用（含流式进行中的会话）
     const cached = sessionMap[sessionId];
     if (cached?.loaded) return;
 
@@ -80,7 +98,6 @@ export default function App() {
           loaded: true,
         })
       );
-      // 清理该会话的流式 ref（后端没有流式中的内容）
       delete streamingRefs.current[sessionId];
     } catch {
       setSessionMap((prev) =>
@@ -114,7 +131,7 @@ export default function App() {
   const handleQuery = useCallback(
     (query: string) => {
       if (!activeSessionId) return;
-      const sid = activeSessionId; // 闭包捕获，防止后续变化
+      const sid = activeSessionId;
 
       // 取消该会话上一次请求
       abortCtrls.current[sid]?.abort();
@@ -212,7 +229,6 @@ export default function App() {
               }
 
               delete streamingRefs.current[sid];
-              // 刷新会话列表（消息数已更新）
               setSessionListKey((k) => k + 1);
               break;
             }
@@ -276,9 +292,17 @@ export default function App() {
           fontSize: 18,
           fontWeight: 600,
           letterSpacing: 1,
+          display: "flex",
+          alignItems: "center",
+          gap: 16,
         }}
       >
-        🔍 LLM 查询面板
+        <span>🔍 LLM 查询面板</span>
+        <ProjectSelector
+          activeProjectId={activeProjectId}
+          onSelect={handleSelectProject}
+          onRefresh={handleProjectRefresh}
+        />
       </header>
 
       {/* 主体 */}
@@ -286,6 +310,7 @@ export default function App() {
         <SessionSidebar
           key={sessionListKey}
           activeId={activeSessionId}
+          projectId={activeProjectId}
           onSelect={handleSelectSession}
           onNew={handleNewSession}
           onRefresh={handleRefreshSessions}
@@ -322,10 +347,21 @@ export default function App() {
                 gap: 8,
               }}
             >
-              <p>👈 选择一个会话或创建新会话开始对话</p>
-              <p style={{ fontSize: 13 }}>
-                每个会话是独立的对话线程，会自动保存全部消息。
-              </p>
+              {activeProjectId ? (
+                <>
+                  <p>👈 选择一个会话或创建新会话开始对话</p>
+                  <p style={{ fontSize: 13 }}>
+                    每个会话是独立的对话线程，会自动保存全部消息。
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>📁 请先在顶部选择一个项目</p>
+                  <p style={{ fontSize: 13 }}>
+                    不同项目可以关联不同的资料库（LightRag 实例）。
+                  </p>
+                </>
+              )}
             </div>
           )}
         </main>

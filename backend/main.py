@@ -1,4 +1,4 @@
-"""FastAPI 应用入口 —— 路由注册、CORS 配置、SSE 端点、会话管理。"""
+"""FastAPI 应用入口 —— 路由注册、CORS 配置、SSE 端点、会话管理、项目管理。"""
 
 from __future__ import annotations
 
@@ -17,11 +17,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from db import (
+    create_project,
     create_session,
+    delete_project,
     delete_session,
+    get_project,
     get_session,
     get_session_messages,
+    list_projects,
     list_sessions,
+    update_project,
 )
 from history import (
     delete_all,
@@ -31,6 +36,10 @@ from history import (
 )
 from models import (
     MessageItem,
+    ProjectCreate,
+    ProjectItem,
+    ProjectList,
+    ProjectUpdate,
     QueryRequest,
     SessionDetail,
     SessionItem,
@@ -48,6 +57,116 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── 项目 ──────────────────────────────────────────────
+
+@app.get("/api/projects", response_model=ProjectList)
+async def handle_list_projects():
+    """列出全部项目（按更新时间降序）。"""
+    rows = await list_projects()
+    items = [
+        ProjectItem(
+            id=r["id"],
+            name=r["name"],
+            description=r["description"],
+            llm_api_url=r["llm_api_url"],
+            llm_query_mode=r["llm_query_mode"],
+            session_count=r["session_count"],
+            created_at=r["created_at"],
+            updated_at=r["updated_at"],
+        )
+        for r in rows
+    ]
+    return ProjectList(items=items)
+
+
+@app.post("/api/projects", response_model=ProjectItem)
+async def handle_create_project(req: ProjectCreate):
+    """创建新项目。"""
+    project_id = f"proj_{uuid.uuid4().hex[:8]}"
+    created_at = datetime.now(timezone.utc).isoformat()
+    await create_project(
+        project_id=project_id,
+        name=req.name,
+        description=req.description,
+        llm_api_url=req.llm_api_url,
+        llm_api_key=req.llm_api_key,
+        llm_query_mode=req.llm_query_mode,
+        prompt_template=req.prompt_template,
+        created_at=created_at,
+    )
+    return ProjectItem(
+        id=project_id,
+        name=req.name,
+        description=req.description,
+        llm_api_url=req.llm_api_url,
+        llm_query_mode=req.llm_query_mode,
+        session_count=0,
+        created_at=created_at,
+        updated_at=created_at,
+    )
+
+
+@app.get("/api/projects/{project_id}", response_model=ProjectItem)
+async def handle_get_project(project_id: str):
+    """获取项目详情。"""
+    row = await get_project(project_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    session_count = 0  # 由 list_projects 带回，get 不查
+    return ProjectItem(
+        id=row["id"],
+        name=row["name"],
+        description=row["description"],
+        llm_api_url=row["llm_api_url"],
+        llm_query_mode=row["llm_query_mode"],
+        session_count=session_count,
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+@app.put("/api/projects/{project_id}", response_model=ProjectItem)
+async def handle_update_project(project_id: str, req: ProjectUpdate):
+    """更新项目配置。"""
+    existing = await get_project(project_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    # 只更新非 None 字段
+    updates: dict[str, str] = {}
+    for field in ("name", "description", "llm_api_url", "llm_api_key",
+                  "llm_query_mode", "prompt_template"):
+        val = getattr(req, field, None)
+        if val is not None:
+            updates[field] = val
+
+    if updates:
+        await update_project(project_id, **updates)
+
+    # 重新读取返回
+    row = await get_project(project_id)
+    return ProjectItem(
+        id=row["id"],
+        name=row["name"],
+        description=row["description"],
+        llm_api_url=row["llm_api_url"],
+        llm_query_mode=row["llm_query_mode"],
+        session_count=0,
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+@app.delete("/api/projects/{project_id}")
+async def handle_delete_project(project_id: str):
+    """删除项目（其下会话 project_id 置空，不级联删除）。"""
+    existing = await get_project(project_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    await delete_project(project_id)
+    return None
 
 
 # ── 查询（无会话，向后兼容）─────────────────────────────
@@ -75,13 +194,14 @@ async def handle_query(req: QueryRequest):
 # ── 会话 ──────────────────────────────────────────────
 
 @app.get("/api/sessions", response_model=SessionList)
-async def handle_list_sessions():
-    """列出全部会话（按最新更新时间降序）。"""
-    rows = await list_sessions()
+async def handle_list_sessions(project_id: str | None = Query(default=None)):
+    """列出会话（可按项目过滤）。"""
+    rows = await list_sessions(project_id=project_id)
     items = [
         SessionItem(
             id=r["id"],
             title=r["title"],
+            project_id=r.get("project_id") or "",
             created_at=r["created_at"],
             updated_at=r["updated_at"],
             msg_count=r["msg_count"],
@@ -92,14 +212,53 @@ async def handle_list_sessions():
 
 
 @app.post("/api/sessions", response_model=SessionItem)
-async def handle_create_session():
-    """创建新会话。"""
+async def handle_create_session(project_id: str | None = Query(default=None)):
+    """创建新会话（可指定所属项目）。"""
     session_id = f"sess_{uuid.uuid4().hex[:8]}"
     created_at = datetime.now(timezone.utc).isoformat()
-    await create_session(session_id, "新对话", created_at)
+    await create_session(session_id, "新对话", created_at, project_id=project_id or "")
     return SessionItem(
         id=session_id,
         title="新对话",
+        project_id=project_id or "",
+        created_at=created_at,
+        updated_at=created_at,
+        msg_count=0,
+    )
+
+
+@app.get("/api/projects/{project_id}/sessions", response_model=SessionList)
+async def handle_list_project_sessions(project_id: str):
+    """列出指定项目下的会话。"""
+    rows = await list_sessions(project_id=project_id)
+    items = [
+        SessionItem(
+            id=r["id"],
+            title=r["title"],
+            project_id=r.get("project_id") or project_id,
+            created_at=r["created_at"],
+            updated_at=r["updated_at"],
+            msg_count=r["msg_count"],
+        )
+        for r in rows
+    ]
+    return SessionList(items=items)
+
+
+@app.post("/api/projects/{project_id}/sessions", response_model=SessionItem)
+async def handle_create_project_session(project_id: str):
+    """在指定项目下创建新会话。"""
+    existing = await get_project(project_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    session_id = f"sess_{uuid.uuid4().hex[:8]}"
+    created_at = datetime.now(timezone.utc).isoformat()
+    await create_session(session_id, "新对话", created_at, project_id=project_id)
+    return SessionItem(
+        id=session_id,
+        title="新对话",
+        project_id=project_id,
         created_at=created_at,
         updated_at=created_at,
         msg_count=0,
@@ -129,6 +288,7 @@ async def handle_get_session(session_id: str):
     return SessionDetail(
         id=session["id"],
         title=session["title"],
+        project_id=session.get("project_id") or "",
         created_at=session["created_at"],
         updated_at=session["updated_at"],
         messages=messages,
@@ -152,9 +312,7 @@ async def handle_session_query(session_id: str, req: SessionQueryRequest):
     # 验证会话存在
     session = await get_session(session_id)
     if session is None:
-        # 自动创建
-        created_at = datetime.now(timezone.utc).isoformat()
-        await create_session(session_id, "新对话", created_at)
+        raise HTTPException(status_code=404, detail="会话不存在")
 
     async def event_stream() -> AsyncIterator[str]:
         scheduler = get_scheduler()

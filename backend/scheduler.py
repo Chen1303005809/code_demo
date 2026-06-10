@@ -16,10 +16,12 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger("scheduler")
 
-from config import get_config
+from config import EffectiveConfig, get_config
 from db import (
     create_session,
+    get_project,
     get_session_messages,
+    get_session_project,
     make_title,
     save_message,
     touch_session,
@@ -82,12 +84,20 @@ class Scheduler:
         self._queue: asyncio.Queue[_WaitingTask] = asyncio.Queue()
         self._recent_durations: list[float] = []
 
+    async def _try_acquire_slot(self) -> bool:
+        """非阻塞尝试获取槽位，失败时返回 False 而不阻塞。"""
+        try:
+            await asyncio.wait_for(self._semaphore.acquire(), timeout=0.001)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
     # ── 无会话查询（向后兼容）───────────────────────
 
     async def submit(self, query: str) -> AsyncIterator[str]:
         query_id = f"q_{datetime.now(timezone.utc).strftime('%Y%m%d')}_{uuid.uuid4().hex[:6]}"
-        if not self._semaphore.locked():
-            await self._semaphore.acquire()
+        acquired = await self._try_acquire_slot()
+        if acquired:
             async for line in self._run(query_id, query):
                 yield line
         else:
@@ -123,8 +133,8 @@ class Scheduler:
             for m in context_messages
         ] if context_messages else None
 
-        if not self._semaphore.locked():
-            await self._semaphore.acquire()
+        acquired = await self._try_acquire_slot()
+        if acquired:
             async for line in self._run(
                 query_id, query,
                 session_id=session_id, message_id=assistant_msg_id,
@@ -170,15 +180,22 @@ class Scheduler:
         session_id: str = "", message_id: str = "",
         conversation_history: list[dict] | None = None,
     ) -> AsyncIterator[str]:
-        config = get_config()
         started_at = time.monotonic()
         full_answer_parts: list[str] = []
         had_error = False
 
+        # 解析有效配置：项目级 > 全局级
+        project_config: dict | None = None
+        if session_id:
+            project_id = await get_session_project(session_id)
+            if project_id:
+                project_config = await get_project(project_id)
+        effective = EffectiveConfig(project=project_config)
+
         try:
             yield _SSEEvent.started()
             async for chunk_text in stream_chunks(
-                config, query,
+                effective, query,
                 conversation_history=conversation_history,
             ):
                 full_answer_parts.append(chunk_text)
@@ -227,7 +244,11 @@ class Scheduler:
             self._semaphore.release()
             if not self._queue.empty():
                 next_task = self._queue.get_nowait()
-                asyncio.create_task(self._drain_queue(next_task))
+                drain_task = asyncio.create_task(self._drain_queue(next_task))
+                drain_task.add_done_callback(
+                    lambda t: t.exception() is not None
+                    and logger.exception("队列任务异常")
+                )
 
     async def _drain_queue(self, task: _WaitingTask) -> None:
         try:
@@ -246,10 +267,11 @@ class Scheduler:
         await task.event_queue.put(None)
 
     def _estimate_wait_ms(self) -> int:
+        qsize = self._queue.qsize()
         if not self._recent_durations:
-            return 10000
+            return 10000 * max(qsize, 1)
         avg = sum(self._recent_durations) / len(self._recent_durations)
-        return int(self._queue.qsize() * avg * 1000)
+        return int(qsize * avg * 1000)
 
     def _record_duration(self, seconds: float) -> None:
         self._recent_durations.append(seconds)

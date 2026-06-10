@@ -5,12 +5,64 @@
 import type {
   HistoryDetail,
   HistoryPage,
+  ProjectCreate,
+  ProjectItem,
+  ProjectList,
+  ProjectUpdate,
+  SSEChunkData,
+  SSEDoneData,
+  SSEErrorData,
   SSEEvent,
   SSEEventType,
+  SSEQueuedData,
   SessionDetail,
   SessionItem,
   SessionList,
 } from "./types";
+
+// ── 项目 ───────────────────────────────────────────
+
+export async function fetchProjects(): Promise<ProjectList> {
+  const resp = await fetch("/api/projects");
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function createProject(data: ProjectCreate): Promise<ProjectItem> {
+  const resp = await fetch("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function fetchProject(projectId: string): Promise<ProjectItem> {
+  const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}`);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function updateProject(
+  projectId: string,
+  data: ProjectUpdate,
+): Promise<ProjectItem> {
+  const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+export async function deleteProject(projectId: string): Promise<void> {
+  const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
 
 // ── SSE 查询 ───────────────────────────────────────
 
@@ -75,14 +127,20 @@ export function streamSessionQuery(
 
 // ── 会话 ───────────────────────────────────────────
 
-export async function fetchSessions(): Promise<SessionList> {
-  const resp = await fetch("/api/sessions");
+export async function fetchSessions(projectId?: string): Promise<SessionList> {
+  const url = projectId
+    ? `/api/projects/${encodeURIComponent(projectId)}/sessions`
+    : "/api/sessions";
+  const resp = await fetch(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }
 
-export async function createSession(): Promise<SessionItem> {
-  const resp = await fetch("/api/sessions", { method: "POST" });
+export async function createSession(projectId?: string): Promise<SessionItem> {
+  const url = projectId
+    ? `/api/projects/${encodeURIComponent(projectId)}/sessions`
+    : "/api/sessions";
+  const resp = await fetch(url, { method: "POST" });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }
@@ -171,17 +229,27 @@ function parseSSEFrame(frame: string): SSEEvent | null {
 
   if (!eventType) return null;
 
+  // 安全解析 dataStr，避免半帧/损坏帧导致整个流崩溃
+  let data: unknown;
+  if (dataStr && eventType !== "started") {
+    try {
+      data = JSON.parse(dataStr);
+    } catch {
+      return null; // 跳过损坏的帧
+    }
+  }
+
   switch (eventType) {
     case "queued":
-      return { type: "queued", data: JSON.parse(dataStr) };
+      return { type: "queued", data: data as SSEQueuedData };
     case "started":
       return { type: "started" };
     case "chunk":
-      return { type: "chunk", data: JSON.parse(dataStr) };
+      return { type: "chunk", data: data as SSEChunkData };
     case "done":
-      return { type: "done", data: JSON.parse(dataStr) };
+      return { type: "done", data: data as SSEDoneData };
     case "error":
-      return { type: "error", data: JSON.parse(dataStr) };
+      return { type: "error", data: data as SSEErrorData };
     default:
       return null;
   }

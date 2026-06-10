@@ -4,11 +4,47 @@ export interface QueryRequest {
   query: string;
 }
 
+// ── 项目 ──────────────────────────────────────────
+
+export interface ProjectCreate {
+  name: string;
+  description?: string;
+  llm_api_url?: string;
+  llm_api_key?: string;
+  llm_query_mode?: string;
+  prompt_template?: string;
+}
+
+export interface ProjectUpdate {
+  name?: string;
+  description?: string;
+  llm_api_url?: string;
+  llm_api_key?: string;
+  llm_query_mode?: string;
+  prompt_template?: string;
+}
+
+export interface ProjectItem {
+  id: string;
+  name: string;
+  description: string;
+  llm_api_url: string;
+  llm_query_mode: string;
+  session_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectList {
+  items: ProjectItem[];
+}
+
 // ── 会话 ──────────────────────────────────────────
 
 export interface SessionItem {
   id: string;
   title: string;
+  project_id: string;
   created_at: string;
   updated_at: string;
   msg_count: number;
@@ -30,6 +66,7 @@ export interface MessageItem {
 export interface SessionDetail {
   id: string;
   title: string;
+  project_id: string;
   created_at: string;
   updated_at: string;
   messages: MessageItem[];

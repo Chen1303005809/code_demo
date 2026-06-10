@@ -2,9 +2,45 @@
 
 from __future__ import annotations
 
+from typing import Optional
 from enum import StrEnum
 
 from pydantic import BaseModel
+
+
+# ── 项目 ──────────────────────────────────────────
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: str = ""
+    llm_api_url: str = ""
+    llm_api_key: str = ""
+    llm_query_mode: str = "mix"
+    prompt_template: str = "{query}"
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    llm_api_url: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    llm_query_mode: Optional[str] = None
+    prompt_template: Optional[str] = None
+
+
+class ProjectItem(BaseModel):
+    id: str
+    name: str
+    description: str
+    llm_api_url: str
+    llm_query_mode: str
+    session_count: int
+    created_at: str
+    updated_at: str
+
+
+class ProjectList(BaseModel):
+    items: list[ProjectItem]
 
 
 # ── 请求 ──────────────────────────────────────────
@@ -22,6 +58,7 @@ class SessionQueryRequest(BaseModel):
 class SessionItem(BaseModel):
     id: str
     title: str
+    project_id: str
     created_at: str
     updated_at: str
     msg_count: int
@@ -43,6 +80,7 @@ class MessageItem(BaseModel):
 class SessionDetail(BaseModel):
     id: str
     title: str
+    project_id: str
     created_at: str
     updated_at: str
     messages: list[MessageItem]

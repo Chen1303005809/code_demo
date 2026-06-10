@@ -94,31 +94,64 @@ async def _init_tables(db: aiosqlite.Connection) -> None:
     await db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC)")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_queries_created_at ON queries(created_at DESC)")
     await db.commit()
+    # 项目表
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS projects (
+            id              TEXT PRIMARY KEY,
+            name            TEXT NOT NULL,
+            description     TEXT NOT NULL DEFAULT '',
+            llm_api_url     TEXT NOT NULL DEFAULT '',
+            llm_api_key     TEXT NOT NULL DEFAULT '',
+            llm_query_mode  TEXT NOT NULL DEFAULT 'mix',
+            prompt_template TEXT NOT NULL DEFAULT '{query}',
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL
+        )
+    """)
+    # sessions 表增加 project_id（向前兼容已有数据库）
+    try:
+        await db.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL")
+    except Exception:
+        pass  # 列已存在
+    # 索引
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id)")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC)")
+    await db.commit()
 
 
 # ── 会话 CRUD ─────────────────────────────────────────
 
-async def create_session(session_id: str, title: str, created_at: str) -> None:
+async def create_session(session_id: str, title: str, created_at: str, project_id: str = "") -> None:
     db = await _connect()
     try:
         await db.execute(
-            "INSERT INTO sessions (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
-            (session_id, title, created_at, created_at),
+            "INSERT INTO sessions (id, title, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (session_id, title, project_id, created_at, created_at),
         )
         await db.commit()
     finally:
         await db.close()
 
 
-async def list_sessions() -> list[dict]:
+async def list_sessions(project_id: str | None = None) -> list[dict]:
     db = await _connect()
     try:
-        cursor = await db.execute(
-            """SELECT s.id, s.title, s.created_at, s.updated_at,
-                      (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count
-               FROM sessions s
-               ORDER BY s.updated_at DESC"""
-        )
+        if project_id is not None:
+            cursor = await db.execute(
+                """SELECT s.id, s.title, s.project_id, s.created_at, s.updated_at,
+                          (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count
+                   FROM sessions s
+                   WHERE s.project_id = ?
+                   ORDER BY s.updated_at DESC""",
+                (project_id,),
+            )
+        else:
+            cursor = await db.execute(
+                """SELECT s.id, s.title, s.project_id, s.created_at, s.updated_at,
+                          (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count
+                   FROM sessions s
+                   ORDER BY s.updated_at DESC""",
+            )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -213,6 +246,98 @@ async def get_message_count(session_id: str) -> int:
         )
         row = await cursor.fetchone()
         return row["cnt"] if row else 0
+    finally:
+        await db.close()
+
+
+# ── 项目 CRUD ─────────────────────────────────────────
+
+async def create_project(
+    project_id: str, name: str, description: str,
+    llm_api_url: str, llm_api_key: str, llm_query_mode: str,
+    prompt_template: str, created_at: str,
+) -> None:
+    db = await _connect()
+    try:
+        await db.execute(
+            "INSERT INTO projects (id, name, description, llm_api_url, llm_api_key, "
+            "llm_query_mode, prompt_template, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, name, description, llm_api_url, llm_api_key,
+             llm_query_mode, prompt_template, created_at, created_at),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def list_projects() -> list[dict]:
+    db = await _connect()
+    try:
+        cursor = await db.execute(
+            """SELECT p.*,
+                      (SELECT COUNT(*) FROM sessions s WHERE s.project_id = p.id) AS session_count
+               FROM projects p
+               ORDER BY p.updated_at DESC""",
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def get_project(project_id: str) -> dict | None:
+    db = await _connect()
+    try:
+        cursor = await db.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def update_project(project_id: str, **fields: str) -> None:
+    """更新项目字段。fields 只包含要更新的键值对。"""
+    if not fields:
+        return
+    db = await _connect()
+    try:
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values())
+        values.append(_now_iso())
+        values.append(project_id)
+        await db.execute(
+            f"UPDATE projects SET {set_clause}, updated_at = ? WHERE id = ?",
+            values,
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def delete_project(project_id: str) -> None:
+    db = await _connect()
+    try:
+        # 将该项目下所有会话的 project_id 置空（而非级联删除）
+        await db.execute(
+            "UPDATE sessions SET project_id = NULL WHERE project_id = ?",
+            (project_id,),
+        )
+        await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_session_project(session_id: str) -> str | None:
+    """获取会话所属的项目 id。"""
+    db = await _connect()
+    try:
+        cursor = await db.execute(
+            "SELECT project_id FROM sessions WHERE id = ?", (session_id,),
+        )
+        row = await cursor.fetchone()
+        return row["project_id"] if row else None
     finally:
         await db.close()
 

@@ -5,13 +5,20 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 
-from config import Config
-
 logger = logging.getLogger("llm_client")
+
+
+class LLMConfig(Protocol):
+    """stream_chunks 所需的配置字段协议。"""
+    llm_api_url: str
+    llm_api_key: str
+    llm_query_mode: str
+    llm_timeout_ms: int
+    llm_user_prompt_template: str
 
 
 class LLMError(Exception):
@@ -19,7 +26,7 @@ class LLMError(Exception):
 
 
 async def stream_chunks(
-    config: Config, query: str,
+    config: LLMConfig, query: str,
     conversation_history: list[dict] | None = None,
 ) -> AsyncIterator[str]:
     """向 LightRag /query/stream 发起流式请求。
@@ -37,10 +44,15 @@ async def stream_chunks(
 
     url = f"{config.llm_api_url.rstrip('/')}/query/stream"
 
+    # 使用配置中的提示词模板拼接最终 query
+    template = config.llm_user_prompt_template
+    if "{query}" in template:
+        final_query = template.replace("{query}", query)
+    else:
+        final_query = f"{template}\n{query}"
+
     payload: dict[str, Any] = {
-        "query": f'''{query}\n 你回复时，必须遵循以下规则：
-1. 当你提及函数名时，你必须标明该函数名所在的文件名
-2. 当你提及函数时，你必须标明该函数的返回类型''',
+        "query": final_query,
         "mode": config.llm_query_mode,
         "stream": True,
         "include_references": True,

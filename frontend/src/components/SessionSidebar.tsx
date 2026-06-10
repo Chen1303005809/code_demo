@@ -8,12 +8,13 @@ import type { SessionItem } from "../lib/types";
 
 interface Props {
   activeId: string | null;
+  projectId: string | null;
   onSelect: (id: string) => void;
   onNew: (id: string) => void;
   onRefresh: () => void;
 }
 
-export default function SessionSidebar({ activeId, onSelect, onNew, onRefresh }: Props) {
+export default function SessionSidebar({ activeId, projectId, onSelect, onNew, onRefresh }: Props) {
   const [items, setItems] = useState<SessionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -22,7 +23,7 @@ export default function SessionSidebar({ activeId, onSelect, onNew, onRefresh }:
     setLoading(true);
     setError("");
     try {
-      const data = await fetchSessions();
+      const data = await fetchSessions(projectId ?? undefined);
       setItems(data.items);
     } catch {
       setError("加载失败");
@@ -33,7 +34,7 @@ export default function SessionSidebar({ activeId, onSelect, onNew, onRefresh }:
 
   useEffect(() => {
     load();
-  }, []);
+  }, [projectId]);
 
   // 暴露刷新方法给父组件
   useEffect(() => {
@@ -41,11 +42,11 @@ export default function SessionSidebar({ activeId, onSelect, onNew, onRefresh }:
     return () => {
       delete (window as unknown as Record<string, unknown>).__sessionSidebarReload;
     };
-  }, []);
+  }, [projectId]);
 
   const handleNew = async () => {
     try {
-      const sess = await createSession();
+      const sess = await createSession(projectId ?? undefined);
       setItems((prev) => [sess, ...prev]);
       onNew(sess.id);
     } catch {
