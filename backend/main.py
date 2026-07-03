@@ -12,9 +12,12 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from db import (
     create_project,
@@ -365,3 +368,25 @@ async def handle_delete_all():
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ── 前端静态资源托管（Docker 部署时由构建产物注入 ./static）─────────
+# 本地开发（无 ./static 目录）时此段不生效，后端仅提供 API，行为与原先一致。
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+if _STATIC_DIR.is_dir():
+    # Vite 产物：JS/CSS 位于 /assets 下
+    _assets_dir = _STATIC_DIR / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        """SPA 回退：未命中的路径返回 index.html；已注册的 API/健康检查路径放行交由自身处理。"""
+        if full_path.startswith("api/") or full_path == "health":
+            raise HTTPException(status_code=404, detail="Not Found")
+        candidate = _STATIC_DIR / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_STATIC_DIR / "index.html")

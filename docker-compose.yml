@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────
+# LLM 查询面板 —— 一键部署（docker compose，单容器）
+#
+# 后端 FastAPI 同时托管：API（/api、/health）+ 前端构建产物（SPA）。
+# 用法：
+#   1. cp .env.example .env      # 按需修改，尤其 LLM_API_URL
+#   2. docker compose up -d --build
+#   3. 浏览器访问 http://localhost:8080
+#
+# 上游 LightRag 属外部服务（不在本仓库），通过 LLM_API_URL 指向它：
+#   * LightRag 跑在宿主机  → http://host.docker.internal:9621（默认）
+#   * LightRag 同在网络内 → 改成该服务名/地址
+# ─────────────────────────────────────────────────────────────
+
+services:
+  app:
+    build: .
+    image: llm-dashboard
+    container_name: llm-dashboard
+    ports:
+      - "8080:8000"
+    # 所有变量支持 .env 覆盖；未提供 .env 时用默认值即可启动
+    environment:
+      LLM_API_URL: ${LLM_API_URL:-http://host.docker.internal:9621}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_QUERY_MODE: ${LLM_QUERY_MODE:-mix}
+      LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-60000}
+      MAX_CONCURRENCY: ${MAX_CONCURRENCY:-3}
+      # 容器内固定数据库路径，配合下方数据卷持久化
+      DB_PATH: /app/data/history.db
+    volumes:
+      - app-data:/app/data
+    # 让容器能解析 host.docker.internal（Linux 下必需；Mac/Windows 无害）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  app-data:

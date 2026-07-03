@@ -1,0 +1,15 @@
+# 构建上下文排除项：避免本地产物/依赖/密钥打入镜像
+**/__pycache__
+**/*.pyc
+.git
+.env
+.env.*
+.venv
+**/node_modules
+**/dist
+backend/data
+data
+*.db
+.codewhale
+.deepseek
+docs
