@@ -21,8 +21,23 @@ export default function ProjectSelector({ activeProjectId, onSelect, onRefresh }
   // 新建表单
   const [formName, setFormName] = useState("");
   const [formUrl, setFormUrl] = useState("");
+  const [formProtocol, setFormProtocol] = useState<"http" | "https">("http");
   const [formMode, setFormMode] = useState("mix");
   const [formDesc, setFormDesc] = useState("");
+
+  // 智能识别粘贴的完整 URL，自动拆分协议；否则原样保留输入。
+  const handleUrlChange = (value: string) => {
+    const trimmed = value.trimStart();
+    if (trimmed.startsWith("https://")) {
+      setFormProtocol("https");
+      setFormUrl(trimmed.slice(8).replace(/^\/+/, ""));
+    } else if (trimmed.startsWith("http://")) {
+      setFormProtocol("http");
+      setFormUrl(trimmed.slice(7).replace(/^\/+/, ""));
+    } else {
+      setFormUrl(value);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -43,10 +58,12 @@ export default function ProjectSelector({ activeProjectId, onSelect, onRefresh }
   const handleCreate = async () => {
     const name = formName.trim();
     if (!name) return;
+    const host = formUrl.trim().replace(/^\/+/, "");
+    const fullUrl = host ? `${formProtocol}://${host}` : "";
     const data: ProjectCreate = {
       name,
       description: formDesc.trim(),
-      llm_api_url: formUrl.trim(),
+      llm_api_url: fullUrl,
       llm_query_mode: formMode.trim() || "mix",
     };
     try {
@@ -54,6 +71,7 @@ export default function ProjectSelector({ activeProjectId, onSelect, onRefresh }
       setShowCreate(false);
       setFormName("");
       setFormUrl("");
+      setFormProtocol("http");
       setFormMode("mix");
       setFormDesc("");
       load();
@@ -255,24 +273,50 @@ export default function ProjectSelector({ activeProjectId, onSelect, onRefresh }
               </label>
               <label style={{ color: "#aaa", fontSize: 12 }}>
                 LightRag 地址
-                <input
-                  type="text"
-                  value={formUrl}
-                  onChange={(e) => setFormUrl(e.target.value)}
-                  placeholder="例如：http://127.0.0.1:9621"
+                <div
                   style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    padding: "6px 10px",
+                    display: "flex",
                     marginTop: 4,
                     borderRadius: 6,
+                    overflow: "hidden",
                     border: "1px solid #555",
                     background: "#2a2a3a",
-                    color: "#e0e0e0",
-                    fontSize: 13,
-                    outline: "none",
                   }}
-                />
+                >
+                  <select
+                    value={formProtocol}
+                    onChange={(e) => setFormProtocol(e.target.value as "http" | "https")}
+                    style={{
+                      padding: "6px 8px",
+                      background: "#22223a",
+                      color: "#999",
+                      border: "none",
+                      borderRight: "1px solid #444",
+                      fontSize: 13,
+                      outline: "none",
+                      cursor: "pointer",
+                    }}
+                    title="选择协议"
+                  >
+                    <option value="http">http://</option>
+                    <option value="https">https://</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={formUrl}
+                    onChange={(e) => handleUrlChange(e.target.value)}
+                    placeholder="127.0.0.1:9621"
+                    style={{
+                      flex: 1,
+                      padding: "6px 10px",
+                      background: "transparent",
+                      color: "#e0e0e0",
+                      border: "none",
+                      fontSize: 13,
+                      outline: "none",
+                    }}
+                  />
+                </div>
               </label>
               <label style={{ color: "#aaa", fontSize: 12 }}>
                 查询模式
